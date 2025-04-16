@@ -90,7 +90,7 @@ clip_service = CNClipService()
 # API路由
 @app.post("/embeddings/image")
 # async def image_embedding(request: Optional[ImageRequest] = None, file: Optional[UploadFile] = File(None)):
-async def image_embedding(request: Optional[ImageRequest] = None):
+async def image_embedding(request: ImageRequest):
     """生成图像的embedding向量
     支持三种图片输入方式:
     1. 文件上传
@@ -99,17 +99,8 @@ async def image_embedding(request: Optional[ImageRequest] = None):
     """
     try:
         # 获取图像
-        if file:
-            content = await file.read()
-            image = Image.open(io.BytesIO(content))
-        elif request and request.image_url:
-            response = requests.get(request.image_url)
-            image = Image.open(io.BytesIO(response.content))
-        elif request and request.image_base64:
-            image_data = base64.b64decode(request.image_base64)
-            image = Image.open(io.BytesIO(image_data))
-        else:
-            raise HTTPException(status_code=400, detail="需要提供图像(支持文件上传、URL或Base64)")
+        response = requests.get(request.image_url)
+        image = Image.open(io.BytesIO(response.content))
             
         # 生成embedding
         embedding = await clip_service.process_image(image)
