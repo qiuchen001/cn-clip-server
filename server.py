@@ -36,7 +36,12 @@ class MatchRequest(BaseModel):
 #     image_base64: Optional[str] = None
 
 class ImageRequest(BaseModel):
-    image_url: str
+    image_url: Optional[str] = None
+    image_base64: Optional[str] = None
+
+    @property
+    def has_valid_input(self):
+        return bool(self.image_url) != bool(self.image_base64)  # 确保只提供了一种输入
 
 
 # CN-CLIP服务类
@@ -89,18 +94,32 @@ clip_service = CNClipService()
 
 # API路由
 @app.post("/embeddings/image")
-# async def image_embedding(request: Optional[ImageRequest] = None, file: Optional[UploadFile] = File(None)):
 async def image_embedding(request: ImageRequest):
     """生成图像的embedding向量
-    支持三种图片输入方式:
-    1. 文件上传
-    2. 图片URL
-    3. Base64编码
+    支持两种图片输入方式:
+    1. 图片URL
+    2. Base64编码
     """
     try:
+        if not request.has_valid_input:
+            raise HTTPException(status_code=400, detail="必须且只能提供一种图片输入方式: image_url 或 image_base64")
+
         # 获取图像
-        response = requests.get(request.image_url)
-        image = Image.open(io.BytesIO(response.content))
+        if request.image_url:
+            try:
+                response = requests.get(request.image_url)
+                response.raise_for_status()  # 检查请求是否成功
+                image = Image.open(io.BytesIO(response.content))
+            except requests.exceptions.RequestException as e:
+                raise HTTPException(status_code=400, detail=f"获取图片URL失败: {str(e)}")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"处理URL图片失败: {str(e)}")
+        else:  # 使用base64
+            try:
+                image_data = base64.b64decode(request.image_base64)
+                image = Image.open(io.BytesIO(image_data))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"处理base64图片失败: {str(e)}")
             
         # 生成embedding
         embedding = await clip_service.process_image(image)
@@ -108,8 +127,10 @@ async def image_embedding(request: ImageRequest):
             "success": True,
             "embedding": embedding
         })
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 
 @app.post("/embeddings/text")
