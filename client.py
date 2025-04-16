@@ -77,5 +77,5 @@ request_data = {
 # 调用统一的embeddings接口
 print("=== 调用统一的embeddings接口 ===")
 response = requests.post('http://localhost:8000/embeddings',
-                        json=request_data)
+                         json=request_data)
 print(response.json())
