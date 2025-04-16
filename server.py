@@ -70,21 +70,17 @@ class CNClipService:
             return text_features[0].detach().cpu().numpy().tolist()
 
     async def match(self, image: Image.Image, texts: List[str]):
+        """计算图文匹配相似度,使用CN-CLIP原生的计算方式"""
         processed_image = self.processor(image).unsqueeze(0).to(self.device)
         text = self.tokenizer(texts).to(self.device)
 
         with torch.no_grad():
-            image_features = self.model.encode_image(processed_image)
-            text_features = self.model.encode_text(text)
+            # 使用模型原生的相似度计算方法
+            logits_per_image, logits_per_text = self.model.get_similarity(processed_image, text)
+            probs = logits_per_image.softmax(dim=-1).cpu().numpy()
 
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-
-            similarity = image_features @ text_features.t()
-            similarity = (similarity + 1) / 2
-            similarity = similarity.softmax(dim=-1)
-
-            return {text: float(score) for text, score in zip(texts, similarity[0].cpu().numpy())}
+            # 将概率值与文本对应
+            return {text: float(prob) for text, prob in zip(texts, probs[0])}
 
 
 # 创建服务实例
