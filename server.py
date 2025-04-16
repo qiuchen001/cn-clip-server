@@ -29,11 +29,10 @@ class MatchRequest(BaseModel):
     image_url: Optional[str] = None
     image_base64: Optional[str] = None
 
+    @property
+    def has_valid_input(self):
+        return bool(self.image_url) != bool(self.image_base64)  # 确保只提供了一种输入
 
-# 新增请求模型
-# class ImageRequest(BaseModel):
-#     image_url: Optional[str] = None
-#     image_base64: Optional[str] = None
 
 class ImageRequest(BaseModel):
     image_url: Optional[str] = None
@@ -120,7 +119,7 @@ async def image_embedding(request: ImageRequest):
                 image = Image.open(io.BytesIO(image_data))
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"处理base64图片失败: {str(e)}")
-            
+
         # 生成embedding
         embedding = await clip_service.process_image(image)
         return JSONResponse({
@@ -147,29 +146,35 @@ async def text_embedding(request: TextRequest):
 
 
 @app.post("/match")
-async def match(request: Optional[ImageRequest] = None, file: Optional[UploadFile] = File(None)):
-    """计算图文匹配相似度"""
+async def match(request: MatchRequest):
+    """计算图文匹配相似度
+    支持两种图片输入方式:
+    1. 图片URL
+    2. Base64编码
+    """
     try:
+        if not request.texts:
+            raise HTTPException(status_code=400, detail="texts不能为空")
+
+        if not request.has_valid_input:
+            raise HTTPException(status_code=400, detail="必须且只能提供一种图片输入方式: image_url 或 image_base64")
+
         # 获取图像
-        # if file:
-        #     content = await file.read()
-        #     image = Image.open(io.BytesIO(content))
-        # elif request.image_url:
-        #     response = requests.get(request.image_url)
-        #     image = Image.open(io.BytesIO(response.content))
-        # elif request.image_base64:
-        #     image_data = base64.b64decode(request.image_base64)
-        #     image = Image.open(io.BytesIO(image_data))
-        # else:
-        #     raise HTTPException(status_code=400, detail="需要提供图像")
-
         if request.image_url:
-            response = requests.get(request.image_url)
-            image = Image.open(io.BytesIO(response.content))
-        else:
-            raise HTTPException(status_code=400, detail="需要提供图像")
-
-
+            try:
+                response = requests.get(request.image_url)
+                response.raise_for_status()  # 检查请求是否成功
+                image = Image.open(io.BytesIO(response.content))
+            except requests.exceptions.RequestException as e:
+                raise HTTPException(status_code=400, detail=f"获取图片URL失败: {str(e)}")
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"处理URL图片失败: {str(e)}")
+        else:  # 使用base64
+            try:
+                image_data = base64.b64decode(request.image_base64)
+                image = Image.open(io.BytesIO(image_data))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"处理base64图片失败: {str(e)}")
 
         # 计算匹配度
         scores = await clip_service.match(image, request.texts)
@@ -177,63 +182,10 @@ async def match(request: Optional[ImageRequest] = None, file: Optional[UploadFil
             "success": True,
             "scores": scores
         })
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-def compare_image_texts(texts: List[str],
-                        image_path: Union[str, Path] = None,
-                        image_url: str = None,
-                        image_base64: str = None) -> dict:
-    """
-    计算一张图片与多个文本的相似度
-
-    参数:
-        texts: 文本列表
-        image_path: 本地图片路径
-        image_url: 图片URL
-        image_base64: 图片的base64编码
-
-    返回:
-        dict: 每个文本对应的相似度分数
-    """
-    if not texts:
-        raise ValueError("texts不能为空")
-
-    # 准备请求数据
-    data = {
-        "texts": texts,
-        "image_url": image_url,
-        "image_base64": image_base64
-    }
-    
-    try:
-        if image_path:
-            # 使用文件上传时的请求
-            with open(image_path, 'rb') as f:
-                files = {'file': f}
-                response = requests.post(
-                    'http://localhost:8000/match',
-                    data={'request': json.dumps(data)},  # 将json数据作为form字段发送
-                    files=files
-                )
-        else:
-            # 使用URL或base64时的请求
-            response = requests.post(
-                'http://localhost:8000/match',
-                json=data
-            )
-
-        response.raise_for_status()
-        result = response.json()
-        
-        if result.get("success"):
-            return result["scores"]
-        else:
-            raise Exception(result.get("detail", "未知错误"))
-
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"请求失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
 
 
 if __name__ == "__main__":
