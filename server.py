@@ -43,6 +43,32 @@ class ImageRequest(BaseModel):
         return bool(self.image_url) != bool(self.image_base64)  # 确保只提供了一种输入
 
 
+class ImageInput(BaseModel):
+    image_url: Optional[str] = None
+    image_base64: Optional[str] = None
+
+    @property
+    def has_valid_input(self):
+        return bool(self.image_url) != bool(self.image_base64)  # 确保只提供了一种输入
+
+
+class TextInput(BaseModel):
+    text: str
+
+
+class EmbeddingInput(BaseModel):
+    text: Optional[str] = None
+    image: Optional[ImageInput] = None
+
+    @property
+    def is_valid(self):
+        return bool(self.text) != bool(self.image)  # 确保只提供了文本或图像中的一种
+
+
+class EmbeddingsRequest(BaseModel):
+    inputs: List[EmbeddingInput]
+
+
 # CN-CLIP服务类
 class CNClipService:
     def __init__(self):
@@ -177,6 +203,65 @@ async def match(request: MatchRequest):
         return JSONResponse({
             "success": True,
             "scores": scores
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+
+
+@app.post("/embeddings")
+async def embeddings(request: EmbeddingsRequest):
+    """统一的向量化接口
+    支持文本和图像混合输入:
+    1. 文本输入格式: {"text": "文本内容"}
+    2. 图像输入格式: {"image": {"image_url": "URL"}} 或 {"image": {"image_base64": "BASE64"}}
+    """
+    try:
+        if not request.inputs:
+            raise HTTPException(status_code=400, detail="输入不能为空")
+
+        results = []
+        for input_item in request.inputs:
+            if not input_item.is_valid:
+                raise HTTPException(status_code=400, detail="每个输入项必须且只能包含text或image其中之一")
+
+            if input_item.text:
+                # 处理文本
+                embedding = await clip_service.process_text(input_item.text)
+                results.append({
+                    "type": "text",
+                    "input": input_item.text,
+                    "embedding": embedding
+                })
+            else:
+                # 处理图像
+                if not input_item.image.has_valid_input:
+                    raise HTTPException(status_code=400, detail="图像输入必须且只能提供image_url或image_base64其中之一")
+
+                try:
+                    if input_item.image.image_url:
+                        response = requests.get(input_item.image.image_url)
+                        response.raise_for_status()
+                        image = Image.open(io.BytesIO(response.content))
+                    else:
+                        image_data = base64.b64decode(input_item.image.image_base64)
+                        image = Image.open(io.BytesIO(image_data))
+
+                    embedding = await clip_service.process_image(image)
+                    results.append({
+                        "type": "image",
+                        "input": input_item.image.image_url or "base64_image",
+                        "embedding": embedding
+                    })
+                except requests.exceptions.RequestException as e:
+                    raise HTTPException(status_code=400, detail=f"获取图片URL失败: {str(e)}")
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"处理图片失败: {str(e)}")
+
+        return JSONResponse({
+            "success": True,
+            "results": results
         })
     except HTTPException:
         raise
